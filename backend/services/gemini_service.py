@@ -6,6 +6,10 @@ import sys
 import time
 from typing import List, Dict, Any, Optional
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+# Load environment variables FIRST
+load_dotenv()
 
 # Add parent directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,61 +27,74 @@ if not api_key:
 genai.configure(api_key=api_key)
 
 
-# Define the Tools (Function Declarations)
-GET_JOB_DATA_TOOL = {
-    "name": "get_current_job_data",
-    "description": "Retrieves the full details, estimates, schedule, and milestones for a specific construction job. Use this to load a job context.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "jobId": {
-                "type": "string",
-                "description": "The specific document ID of the job to fetch.",
-            }
-        },
-        "required": ["jobId"]
-    }
-}
-
-SEARCH_JOBS_TOOL = {
-    "name": "search_jobs",
-    "description": "Searches for construction jobs in the database by name, client, address, or ID. Use this when the user mentions a new job or wants to switch projects.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The search term (e.g. 'Smith', 'Hammond', 'Kitchen Remodel').",
-            }
-        },
-        "required": ["query"]
-    }
-}
-
-CALCULATE_TOTAL_TOOL = {
-    "name": "calculate_field_sum",
-    "description": "Calculates the sum of a numeric field within a list, with 'Smart Search' filtering. Use this for questions like 'How much is the Kitchen?', 'Total hours for plumbing', or 'Total duration of framing'.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "listName": {
-                "type": "string",
-                "description": "The name of the list to iterate over. Options: 'estimate', 'schedule', 'milestones', 'flooringEstimateData'.",
+# Define the Tools using proper Google AI SDK format
+get_job_data_tool = {
+    "function_declarations": [{
+        "name": "get_current_job_data",
+        "description": "Retrieves the full details, estimates, schedule, and milestones for a specific construction job. Use this to load a job context.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "jobId": {
+                    "type": "STRING",
+                    "description": "The specific document ID of the job to fetch."
+                }
             },
-            "fieldName": {
-                "type": "string",
-                "description": "The numeric field key to sum up. CRITICAL: Use 'total' for Estimates/Prices. Use 'budgetedTotal' for Internal Budgets/Costs. Use 'hours', 'duration', 'amount' for others.",
-            },
-            "searchQuery": {
-                "type": "string",
-                "description": "The text to filter by. The tool will search across description, area, task name, and remarks. E.g., 'Kitchen', 'Demolition'.",
-            }
-        },
-        "required": ["listName", "fieldName"]
-    }
+            "required": ["jobId"]
+        }
+    }]
 }
 
-TOOLS = [GET_JOB_DATA_TOOL, SEARCH_JOBS_TOOL, CALCULATE_TOTAL_TOOL]
+search_jobs_tool = {
+    "function_declarations": [{
+        "name": "search_jobs",
+        "description": "Searches for construction jobs in the database by name, client, address, or ID. Use this when the user mentions a new job or wants to switch projects.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "The search term (e.g. 'Smith', 'Hammond', 'Kitchen Remodel')."
+                }
+            },
+            "required": ["query"]
+        }
+    }]
+}
+
+calculate_tool = {
+    "function_declarations": [{
+        "name": "calculate_field_sum",
+        "description": "Calculates the sum of a numeric field within a list, with 'Smart Search' filtering. Use this for questions like 'How much is the Kitchen?', 'Total hours for plumbing', or 'Total duration of framing'.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "listName": {
+                    "type": "STRING",
+                    "description": "The name of the list to iterate over. Options: 'estimate', 'schedule', 'milestones', 'flooringEstimateData'."
+                },
+                "fieldName": {
+                    "type": "STRING",
+                    "description": "The numeric field key to sum up. CRITICAL: Use 'total' for Estimates/Prices. Use 'budgetedTotal' for Internal Budgets/Costs. Use 'hours', 'duration', 'amount' for others."
+                },
+                "searchQuery": {
+                    "type": "STRING",
+                    "description": "The text to filter by. The tool will search across description, area, task name, and remarks. E.g., 'Kitchen', 'Demolition'."
+                }
+            },
+            "required": ["listName", "fieldName"]
+        }
+    }]
+}
+
+# Combine all tools
+ALL_TOOLS = {
+    "function_declarations": [
+        get_job_data_tool["function_declarations"][0],
+        search_jobs_tool["function_declarations"][0],
+        calculate_tool["function_declarations"][0]
+    ]
+}
 
 
 def match_item(item: Dict[str, Any], search_query: str) -> bool:
@@ -146,7 +163,7 @@ async def send_message_to_agent(
         # Create model with tools
         model = genai.GenerativeModel(
             model_name=GEMINI_MODEL,
-            tools=TOOLS,
+            tools=[ALL_TOOLS],
             system_instruction=SYSTEM_INSTRUCTION
         )
         
@@ -293,6 +310,8 @@ async def send_message_to_agent(
     
     except Exception as e:
         print(f"❌ Agent Error: {e}")
+        import traceback
+        traceback.print_exc()
         return ChatResponse(
             text="I'm sorry, I encountered an error. Please try again.",
             toolExecutions=tool_executions

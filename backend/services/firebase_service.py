@@ -8,6 +8,10 @@ from typing import List, Dict, Any, Optional
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables FIRST
+load_dotenv()
 
 # Add parent directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,7 +35,7 @@ try:
             cred = credentials.Certificate(cred_dict)
         else:
             # Try to load from file (for local development)
-            cred_path = os.getenv('FIREBASE_CREDENTIALS_PATH', 'firebase-credentials.json')
+            cred_path = os.getenv('FIREBASE_CREDENTIALS_PATH', 'service-account-key.json')
             if os.path.exists(cred_path):
                 cred = credentials.Certificate(cred_path)
             else:

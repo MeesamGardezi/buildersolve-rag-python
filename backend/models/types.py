@@ -1,138 +1,247 @@
 """
-Constants and configuration for BuilderSolve Agent
+Pydantic models for BuilderSolve Agent
 """
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+from datetime import datetime
 
-DEFAULT_COMPANY_ID = "EcgWg9hK2Zdrd3joJ6Fd"
-DEFAULT_JOB_ID = "4ZppggAAJuJMZNB8f2ZT"
 
-GEMINI_MODEL = "gemini-2.5-flash"  # Excellent for tool calling and latency
+# ============================================================================
+# Basic Data Structure Models
+# ============================================================================
 
-# Fallback Mock Data if Firestore is not configured or fails
-MOCK_JOB_DATA = {
-    "documentId": DEFAULT_JOB_ID,
-    "projectTitle": "MOCK: Smith Residence (Please Config Firebase)",
-    "clientName": "John & Jane Smith",
-    "status": "In Planning",
-    "siteStreet": "123 Maple Avenue",
-    "siteCity": "Springfield",
-    "estimateType": "general",
-    "estimate": [
-        {
-            "area": "Kitchen",
-            "taskScope": "Demolition",
-            "description": "Remove existing cabinets",
-            "total": 1500.00,
-            "budgetedTotal": 1200.00,
-            "costCode": "02-100",
-            "rowType": "estimate"
-        },
-        {
-            "area": "Kitchen",
-            "taskScope": "Flooring",
-            "description": "Install new hardwood",
-            "total": 4500.00,
-            "budgetedTotal": 3800.00,
-            "costCode": "09-600",
-            "rowType": "estimate"
-        },
-        {
-            "area": "Site",
-            "taskScope": "Cleanup",
-            "description": "General Site Cleanup Materials",
-            "total": 655.50,
-            "budgetedTotal": 475.00,
-            "costCode": "01-100",
-            "rowType": "estimate"
-        }
-    ],
-    "schedule": [
-        {
-            "id": "task_1",
-            "index": 0,
-            "task": "Site Preparation",
-            "startDate": "2024-05-01",
-            "endDate": "2024-05-03",
-            "duration": 3,
-            "percentageComplete": 100,
-            "isCritical": True,
-            "hours": 24,
-            "consumed": 24,
-            "isMainTask": True,
-            "dependencies": [],
-            "resources": {},
-            "schedulingMode": "Automatic",
-            "taskType": "standard",
-            "remarks": "",
-            "totalSlack": 0,
-            "isBaselineSet": True,
-            "paymentStages": [],
-            "totalPaymentAmount": 0
-        },
-        {
-            "id": "task_2",
-            "index": 1,
-            "task": "Kitchen Demolition",
-            "startDate": "2024-05-04",
-            "endDate": "2024-05-10",
-            "duration": 7,
-            "percentageComplete": 50,
-            "isCritical": True,
-            "hours": 56,
-            "consumed": 28,
-            "isMainTask": True,
-            "dependencies": [{"predecessorTaskId": "task_1", "type": "FS", "lag": 0}],
-            "resources": {},
-            "schedulingMode": "Automatic",
-            "taskType": "standard",
-            "remarks": "",
-            "totalSlack": 0,
-            "isBaselineSet": True,
-            "paymentStages": [],
-            "totalPaymentAmount": 0
-        }
-    ],
-    "milestones": [
-        {"title": "Initial Deposit", "amount": 2000.00, "state": True},
-        {"title": "Demolition Complete", "amount": 1500.00, "state": False},
-        {"title": "Rough-In Complete", "amount": 2500.00, "state": False},
-        {"title": "Final Payment", "amount": 3000.00, "state": False}
-    ],
-    "costCodes": [],
-    "flooringEstimateData": [],
-    "clientEmail1": "john.smith@email.com",
-    "clientPhone": "(555) 123-4567",
-    "siteState": "IL",
-    "siteZip": "62701"
-}
+class Milestone(BaseModel):
+    """Payment milestone model"""
+    title: str
+    amount: float
+    state: bool
 
-# System Instruction for Gemini Agent
-SYSTEM_INSTRUCTION = """
-You are an intelligent construction project manager agent for 'BuilderSolve'. 
 
-OPERATIONAL WORKFLOW:
-1. **JOB CONTEXT**: You have access to one job at a time. 
-2. **SWITCHING JOBS**: If the user asks about a different job (e.g., "What about the Hammond job?"), you MUST:
-   a. Call 'search_jobs' with the name.
-   b. Look at the results.
-   c. Call 'get_current_job_data' with the correct 'documentId'.
-   d. Answer the question using the new data.
+class CostCode(BaseModel):
+    """Cost code model"""
+    code: str
+    description: str
 
-CRITICAL DATA INTERPRETATION RULES (FINANCIAL):
-- **'total' Field**: This represents the **ESTIMATED PRICE** charged to the client.
-- **'budgetedTotal' Field**: This represents the **INTERNAL BUDGET** or **EXPENSE** to the company.
-- **Profit**: 'total' - 'budgetedTotal'.
-- **RULE**: If the user asks for "Cost", "Price", or "Estimate" without explicitly saying "Budget", use **'total'**.
 
-CRITICAL DATA INTERPRETATION RULES (SCHEDULE & MILESTONES):
-- **SCHEDULE**: The 'schedule' list contains all tasks.
-- **COMPLETED MILESTONES**: 
-  - A task in the 'schedule' is considered a "Completed Milestone" or "Finished Phase" ONLY if **percentageComplete === 100**.
-  - If the user asks "What milestones are complete?", look at the 'schedule' list and filter for 100% completion.
-- **Dates**: 'startDate', 'endDate'.
-- **Critical Path**: 'isCritical' = true.
+class EstimateRow(BaseModel):
+    """Estimate row model"""
+    area: Optional[str] = None
+    taskScope: Optional[str] = None
+    costCode: Optional[str] = None
+    description: Optional[str] = None
+    units: Optional[str] = None
+    qty: Optional[float] = None
+    rate: Optional[float] = None
+    total: float = 0.0  # Price to Client (ESTIMATE)
+    budgetedRate: Optional[float] = None
+    budgetedTotal: float = 0.0  # Internal Cost (BUDGET)
+    notesRemarks: Optional[str] = None
+    rowType: str = "estimate"  # 'estimate' | 'allowance'
+    materials: Optional[List[Any]] = []
 
-FORMATTING:
-- Money: $X,XXX.XX
-- Dates: Month Day, Year (e.g. "Oct 12, 2024")
-- Percentages: X%
-"""
+
+class FlooringEstimateRow(BaseModel):
+    """Flooring estimate row model"""
+    floorTypeId: Optional[str] = None
+    vendor: Optional[str] = None
+    itemMaterialName: Optional[str] = None
+    brand: Optional[str] = None
+    unit: Optional[str] = None
+    measuredQty: Optional[float] = None
+    supplierQty: Optional[float] = None
+    wasteFactor: Optional[float] = None
+    qtyIncludingWaste: Optional[float] = None
+    unitPrice: Optional[float] = None
+    costPrice: Optional[float] = None
+    taxFreight: Optional[float] = None
+    totalCost: Optional[float] = None
+    salePrice: Optional[float] = None
+    notesRemarks: Optional[str] = None
+
+
+class Dependency(BaseModel):
+    """Task dependency model"""
+    predecessorTaskId: str
+    predecessorId: Optional[str] = None
+    type: str  # 'FS', 'SS', etc.
+    lag: int = 0
+
+
+class PaymentStage(BaseModel):
+    """Payment stage model"""
+    id: str
+    name: str
+    percentage: float
+    isManualDate: bool
+    manualDate: Optional[str] = None
+    baseDate: Optional[str] = None
+    effectiveDate: Optional[str] = None
+    linkedTaskId: Optional[str] = None
+    linkedType: Optional[str] = None
+    lagDays: Optional[int] = None
+
+
+class ScheduleRow(BaseModel):
+    """Schedule row model"""
+    index: int
+    id: str  # Static ID
+    task: str
+    dependencies: List[Dependency] = []
+    hours: float = 0.0
+    consumed: float = 0.0
+    duration: float = 0.0
+    
+    # Dates (ISO Strings)
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+    actualStart: Optional[str] = None
+    actualEnd: Optional[str] = None
+    baselineStartDate: Optional[str] = None
+    baselineEndDate: Optional[str] = None
+    
+    resources: Dict[str, Any] = {}
+    percentageComplete: float = 0.0
+    schedulingMode: str = "Automatic"  # 'Manual' | 'Automatic'
+    taskType: str = "standard"
+    remarks: Optional[str] = None
+    
+    # Structure
+    isMainTask: bool = True
+    mainTaskIndex: Optional[int] = None
+    mainTaskId: Optional[str] = None
+    isExpanded: Optional[bool] = None
+    subtaskIndices: Optional[List[int]] = None
+    subtaskIds: Optional[List[str]] = None
+    
+    # Analysis
+    totalSlack: float = 0.0
+    isCritical: bool = False
+    isBaselineSet: bool = False
+    
+    paymentStages: List[PaymentStage] = []
+    totalPaymentAmount: float = 0.0
+
+
+# ============================================================================
+# Main Job Model
+# ============================================================================
+
+class Job(BaseModel):
+    """Complete job/project model"""
+    documentId: str
+    estimateType: str
+    hasFlooring: Optional[bool] = None
+    isLocked: Optional[bool] = None
+    
+    # Rate Fields
+    actualCarpentry: Optional[float] = None
+    actualMaterialsSalesTax: Optional[float] = None
+    actualOther: Optional[float] = None
+    actualPainting: Optional[float] = None
+    actualProjectManagementAssociate: Optional[float] = None
+    actualProjectManagementPrincipal: Optional[float] = None
+    actualProjectPlanningAssociate: Optional[float] = None
+    actualProjectPlanningPrincipal: Optional[float] = None
+    actualSupervisor: Optional[float] = None
+    
+    carpentry: Optional[float] = None
+    materialMarkup: Optional[float] = None
+    materialsSalesTax: Optional[float] = None
+    other: Optional[float] = None
+    subcontractorMarkup: Optional[float] = None
+    otherJobCostsMarkup: Optional[float] = None
+    painting: Optional[float] = None
+    projectManagementAssociate: Optional[float] = None
+    projectManagementPrincipal: Optional[float] = None
+    projectPlanningAssociate: Optional[float] = None
+    projectPlanningPrincipal: Optional[float] = None
+    supervisor: Optional[float] = None
+    
+    # Project Info
+    createdBy: Optional[str] = None
+    createdDate: Optional[str] = None
+    jobIndex: Optional[int] = None
+    locations: Optional[str] = "[]"  # JSON string
+    milestones: List[Milestone] = []
+    projectDescription: Optional[str] = None
+    projectTitle: str
+    status: str
+    taskIndex: Optional[int] = None
+    
+    # Client Fields
+    clientEmail1: Optional[str] = None
+    clientEmail2: Optional[str] = None
+    clientName: str
+    clientPhone: Optional[str] = None
+    clientPhone2: Optional[str] = None
+    contractDate: Optional[str] = None
+    contractType: Optional[str] = None
+    jobPrefix: Optional[str] = None
+    proposalTitle: Optional[str] = None
+    
+    # Site Fields
+    siteCity: Optional[str] = None
+    siteState: Optional[str] = None
+    siteStreet: Optional[str] = None
+    siteZip: Optional[str] = None
+    
+    # Arrays
+    costCodes: List[CostCode] = []
+    estimate: List[EstimateRow] = []
+    schedule: List[ScheduleRow] = []
+    flooringEstimateData: List[FlooringEstimateRow] = []
+    
+    # Dynamic totals
+    totals: Optional[Dict[str, Any]] = None
+
+    class Config:
+        """Pydantic config"""
+        arbitrary_types_allowed = True
+
+
+# ============================================================================
+# Chat & API Models
+# ============================================================================
+
+class ChatMessagePart(BaseModel):
+    """Part of a chat message"""
+    text: str
+
+
+class ChatMessageContent(BaseModel):
+    """Chat message format for API"""
+    role: str  # 'user' | 'model'
+    parts: List[ChatMessagePart]
+
+
+class ChatRequest(BaseModel):
+    """Request model for chat endpoint"""
+    message: str
+    history: List[ChatMessageContent] = []
+    currentJobId: Optional[str] = None
+
+
+class ToolExecution(BaseModel):
+    """Tool execution record"""
+    id: str
+    toolName: str
+    args: Dict[str, Any]
+    result: Any
+    timestamp: float
+
+
+class ChatResponse(BaseModel):
+    """Response model for chat endpoint"""
+    text: str
+    toolExecutions: List[ToolExecution] = []
+    switchedJobId: Optional[str] = None
+
+
+class ChatMessage(BaseModel):
+    """Chat message model (for internal use)"""
+    id: str
+    role: str  # 'user' | 'model' | 'system'
+    content: str
+    timestamp: datetime
+    isThinking: Optional[bool] = None
+    toolExecutions: Optional[List[ToolExecution]] = None
