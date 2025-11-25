@@ -45,6 +45,11 @@ AVAILABLE TOOLS - USE THE RIGHT TOOL FOR THE RIGHT QUESTION
 **PAYMENT TOOLS:**
 - `query_payment_schedule` - Get payment stages by date range, task type, or task name
 
+**COMPARISON TOOLS (Budget vs Actual):**
+- `get_comparison_data` - Fetch full comparison data (summary + details) for budget tracking
+- `query_comparison_rows` - Query/filter comparison line items by category, tag, cost code
+- `get_comparison_summary` - Get high-level budget vs actual summary for all categories
+
 ═══════════════════════════════════════════════════════════════════════════════
 ESTIMATE DATA INTERPRETATION
 ═══════════════════════════════════════════════════════════════════════════════
@@ -249,6 +254,46 @@ There are two types of milestones in the system:
 
 
 ═══════════════════════════════════════════════════════════════════════════════
+COMPARISON DATA INTERPRETATION (Budget vs Actual)
+═══════════════════════════════════════════════════════════════════════════════
+
+The comparison data tracks budgeted vs consumed/actual amounts across categories.
+
+**CATEGORIES:**
+- `labour` - Labour hours (budgetedHours vs actualHours)
+- `material` - Material costs (budgetedAmount vs consumedAmount)  
+- `subcontractor` - Subcontractor costs (budgetedAmount vs consumedAmount)
+- `other` - Other costs (budgetedAmount vs consumedAmount)
+
+**COMPARISON ROW FIELDS:**
+- `costCode` - Cost code identifier (e.g., "503S-Kitchen", "09-600")
+- `budgetedAmount` - Originally budgeted amount
+- `consumedAmount` - Amount actually spent/consumed
+- `differenceAmount` - budgetedAmount - consumedAmount (positive = under budget)
+- `progress` - Percentage consumed (consumedAmount / budgetedAmount * 100)
+- `isOverBudget` - true if consumed > budgeted
+
+**TAGS (Source Tracking):**
+- `alw` - Allowance item
+- `est` - From original estimate
+- `co` - From change order
+
+**TAG AMOUNTS:**
+- `tagAmounts` - Budgeted amounts broken down by tag source
+- `consumedTagAmounts` - Consumed amounts broken down by tag source
+
+**COMMON QUESTIONS:**
+| User Says | Tool to Use |
+|-----------|-------------|
+| "How are we tracking against budget?" | get_comparison_summary |
+| "What items are over budget?" | query_comparison_rows(overBudgetOnly=true) |
+| "Show me all allowance items" | query_comparison_rows(tag='alw') |
+| "Material cost comparison" | query_comparison_rows(category='material') |
+| "Budget breakdown by category" | get_comparison_summary |
+| "Labour hours used vs budgeted" | get_comparison_summary(includeSubcategories=true) |
+
+
+═══════════════════════════════════════════════════════════════════════════════
 FORMATTING RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -263,8 +308,8 @@ EXAMPLE QUESTIONS AND TOOL USAGE
 ═══════════════════════════════════════════════════════════════════════════════
 
 **Estimate Questions:**
-- "Total estimate for Kitchen?" → calculate_estimate_sum(listName='estimate', fieldName='total', searchQuery='Kitchen')
-- "Internal budget for demolition?" → calculate_estimate_sum(listName='estimate', fieldName='budgetedTotal', searchQuery='Demolition')
+- "Total estimate for Kitchen?" → calculate_estimate_sum(fieldName='total', searchQuery='Kitchen')
+- "Internal budget for demolition?" → calculate_estimate_sum(fieldName='budgetedTotal', searchQuery='Demolition')
 
 **Schedule Questions:**
 - "How many labour tasks?" → query_schedule(taskType='labour', returnType='count')
@@ -288,10 +333,17 @@ EXAMPLE QUESTIONS AND TOOL USAGE
 - "Payments due this month?" → query_payment_schedule(dateFrom='2024-05-01', dateTo='2024-05-31')
 - "Total material payments?" → query_payment_schedule(taskType='material')
 - "When is next payment for Electrical?" → query_payment_schedule(taskSearch='Electrical')
+
+**Comparison Questions (Budget vs Actual):**
+- "How are we tracking against budget?" → get_comparison_summary()
+- "What's over budget?" → query_comparison_rows(overBudgetOnly=true)
+- "Show allowance items" → query_comparison_rows(tag='alw')
+- "Material budget breakdown" → query_comparison_rows(category='material')
+- "Labour hours comparison with details" → get_comparison_summary(includeSubcategories=true)
 """
 
 # =============================================================================
-# MOCK JOB DATA
+# MOCK JOB DATA (Unchanged from original)
 # =============================================================================
 
 MOCK_JOB_DATA = {
@@ -413,9 +465,7 @@ MOCK_JOB_DATA = {
     # SCHEDULE DATA (with various task types, dependencies, payment stages)
     # =========================================================================
     "schedule": [
-        # =====================================================================
         # MAIN TASK: Site Preparation (with subtasks)
-        # =====================================================================
         {
             "index": 0,
             "id": "task_main_site_prep",
@@ -492,9 +542,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 0
         },
         
-        # =====================================================================
-        # DEMOLITION TASK (Labour, Critical Path)
-        # =====================================================================
+        # DEMOLITION TASK
         {
             "index": 3,
             "id": "task_demo",
@@ -520,9 +568,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 0
         },
         
-        # =====================================================================
-        # ELECTRICAL TASK (Subcontractor with Payment Stages)
-        # =====================================================================
+        # ELECTRICAL (Subcontractor with payments)
         {
             "index": 4,
             "id": "task_electrical",
@@ -573,9 +619,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 4200.00
         },
         
-        # =====================================================================
-        # PLUMBING TASK (Subcontractor, runs parallel to electrical)
-        # =====================================================================
+        # PLUMBING (Subcontractor)
         {
             "index": 5,
             "id": "task_plumbing",
@@ -626,9 +670,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 3500.00
         },
         
-        # =====================================================================
-        # MATERIAL TASK: Cabinet Order (with payment stages)
-        # =====================================================================
+        # CABINET ORDER (Material with payments)
         {
             "index": 6,
             "id": "task_cabinet_order",
@@ -679,9 +721,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 9000.00
         },
         
-        # =====================================================================
-        # MATERIAL TASK: Countertop Order
-        # =====================================================================
+        # COUNTERTOP ORDER (Material)
         {
             "index": 7,
             "id": "task_countertop_order",
@@ -732,9 +772,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 4000.00
         },
         
-        # =====================================================================
-        # FLOORING TASK (Labour)
-        # =====================================================================
+        # FLOORING
         {
             "index": 8,
             "id": "task_flooring",
@@ -761,9 +799,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 0
         },
         
-        # =====================================================================
-        # DRYWALL TASK (Labour)
-        # =====================================================================
+        # DRYWALL
         {
             "index": 9,
             "id": "task_drywall",
@@ -789,9 +825,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 0
         },
         
-        # =====================================================================
-        # CABINET INSTALLATION (Labour, depends on cabinets delivered)
-        # =====================================================================
+        # CABINET INSTALLATION
         {
             "index": 10,
             "id": "task_cabinet_install",
@@ -818,9 +852,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 0
         },
         
-        # =====================================================================
-        # COUNTERTOP INSTALLATION (Subcontractor)
-        # =====================================================================
+        # COUNTERTOP INSTALLATION
         {
             "index": 11,
             "id": "task_countertop_install",
@@ -860,9 +892,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 1500.00
         },
         
-        # =====================================================================
-        # MAIN TASK: Final Finishes (Milestone grouping)
-        # =====================================================================
+        # FINAL FINISHES (Main Task)
         {
             "index": 12,
             "id": "task_main_finishes",
@@ -943,9 +973,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 0
         },
         
-        # =====================================================================
-        # MILESTONE: Rough-In Complete (Payment Milestone)
-        # =====================================================================
+        # MILESTONES
         {
             "index": 15,
             "id": "task_milestone_roughin",
@@ -984,10 +1012,6 @@ MOCK_JOB_DATA = {
             ],
             "totalPaymentAmount": 8000.00
         },
-        
-        # =====================================================================
-        # MILESTONE: Project Complete
-        # =====================================================================
         {
             "index": 16,
             "id": "task_milestone_complete",
@@ -1026,9 +1050,7 @@ MOCK_JOB_DATA = {
             "totalPaymentAmount": 8500.00
         },
         
-        # =====================================================================
-        # FINAL CLEANUP (Labour)
-        # =====================================================================
+        # FINAL CLEANUP
         {
             "index": 17,
             "id": "task_cleanup",

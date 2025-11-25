@@ -3,29 +3,39 @@ Firebase Firestore service for job data retrieval
 Enhanced parsing for schedule, payment stages, and dependencies
 """
 import os
-import sys
 import json
 from typing import List, Dict, Any, Optional
+from datetime import datetime
+
 import firebase_admin
 from firebase_admin import credentials, firestore
-from datetime import datetime
 from dotenv import load_dotenv
 
-# Load environment variables FIRST
+# Load environment variables
 load_dotenv()
 
-# Add parent directory to Python path
+# Import constants
+import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from constants import DEFAULT_COMPANY_ID, DEFAULT_JOB_ID, MOCK_JOB_DATA
 
 
-# Initialize Firebase
+# =============================================================================
+# FIREBASE INITIALIZATION
+# =============================================================================
+
 db = None
 
-try:
-    # Check if Firebase is already initialized
-    if not firebase_admin._apps:
+def initialize_firebase() -> Optional[firestore.Client]:
+    """Initialize Firebase and return Firestore client."""
+    global db
+    
+    try:
+        # Check if Firebase is already initialized
+        if firebase_admin._apps:
+            db = firestore.client()
+            return db
+        
         # Try to get credentials from environment or file
         cred_json = os.getenv('FIREBASE_CREDENTIALS')
         
@@ -40,22 +50,31 @@ try:
                 cred = credentials.Certificate(cred_path)
             else:
                 print("⚠️  Firebase credentials not found. Using Mock Data.")
-                cred = None
+                return None
         
-        if cred:
-            firebase_admin.initialize_app(cred)
-            db = firestore.client()
-            print("✅ Firebase initialized successfully")
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("✅ Firebase initialized successfully")
+        return db
         
-except Exception as e:
-    print(f"❌ Error initializing Firebase: {e}")
-    print("⚠️  Falling back to Mock Data")
+    except Exception as e:
+        print(f"❌ Error initializing Firebase: {e}")
+        print("⚠️  Falling back to Mock Data")
+        return None
 
+
+# Initialize on module load
+initialize_firebase()
+
+
+# =============================================================================
+# PARSING HELPERS
+# =============================================================================
 
 def convert_timestamps(data: Any) -> Any:
     """
-    Helper to convert Firestore Timestamp to ISO string.
-    Also handles nested structures.
+    Recursively convert Firestore Timestamps to ISO strings.
+    Handles nested structures (lists and dicts).
     """
     if data is None:
         return data
@@ -82,16 +101,17 @@ def convert_timestamps(data: Any) -> Any:
 def parse_date_field(value: Any) -> Optional[str]:
     """
     Parse various date formats to ISO string (YYYY-MM-DD).
+    
     Handles:
     - String dates (already formatted)
     - Firestore Timestamps
     - Integer timestamps (milliseconds)
+    - datetime objects
     """
     if value is None:
         return None
     
     if isinstance(value, str):
-        # Already a string, assume it's formatted correctly
         return value
     
     if hasattr(value, 'timestamp'):
@@ -111,7 +131,7 @@ def parse_date_field(value: Any) -> Optional[str]:
 
 
 def parse_dependency(dep_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse a dependency object"""
+    """Parse a dependency object from Firestore."""
     return {
         "predecessorTaskId": str(dep_data.get("predecessorTaskId", "")),
         "predecessorId": dep_data.get("predecessorId"),
@@ -121,7 +141,7 @@ def parse_dependency(dep_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def parse_payment_stage(stage_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse a payment stage object"""
+    """Parse a payment stage object from Firestore."""
     return {
         "id": stage_data.get("id", ""),
         "name": stage_data.get("name", ""),
@@ -222,10 +242,24 @@ def parse_schedule_row(task_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-async def search_jobs(query: str, company_id: str = DEFAULT_COMPANY_ID) -> List[Dict[str, Any]]:
+# =============================================================================
+# DATA FETCHING FUNCTIONS
+# =============================================================================
+
+async def search_jobs(
+    query: str,
+    company_id: str = DEFAULT_COMPANY_ID
+) -> List[Dict[str, Any]]:
     """
-    Searches for jobs in Firestore matching the query string.
+    Search for jobs in Firestore matching the query string.
     Performs a broad match on Project Title, Client Name, Site Street, or Job Prefix.
+    
+    Args:
+        query: Search term
+        company_id: Company document ID
+        
+    Returns:
+        List of matching job summaries
     """
     if not db:
         print("⚠️  Firebase not initialized. Cannot perform real search.")
@@ -236,7 +270,10 @@ async def search_jobs(query: str, company_id: str = DEFAULT_COMPANY_ID) -> List[
         
         # For production with thousands of jobs, use Algolia or ElasticSearch
         # For this demo, fetching recent jobs and filtering in memory
-        docs = jobs_ref.order_by("createdDate", direction=firestore.Query.DESCENDING).limit(50).stream()
+        docs = jobs_ref.order_by(
+            "createdDate",
+            direction=firestore.Query.DESCENDING
+        ).limit(50).stream()
         
         search_str = query.lower().strip()
         results = []
@@ -267,10 +304,20 @@ async def search_jobs(query: str, company_id: str = DEFAULT_COMPANY_ID) -> List[
         return []
 
 
-async def fetch_job_data(company_id: str = DEFAULT_COMPANY_ID, job_id: str = DEFAULT_JOB_ID) -> Dict[str, Any]:
+async def fetch_job_data(
+    company_id: str = DEFAULT_COMPANY_ID,
+    job_id: str = DEFAULT_JOB_ID
+) -> Dict[str, Any]:
     """
-    Fetches the full job document from Firestore.
+    Fetch the full job document from Firestore.
     Includes enhanced parsing for schedule, dependencies, and payment stages.
+    
+    Args:
+        company_id: Company document ID
+        job_id: Job document ID
+        
+    Returns:
+        Complete job data dictionary
     """
     # Fallback to mock if DB not initialized
     if not db:
@@ -340,9 +387,21 @@ async def fetch_job_data(company_id: str = DEFAULT_COMPANY_ID, job_id: str = DEF
         return MOCK_JOB_DATA
 
 
-async def get_task_by_id(company_id: str, job_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+async def get_task_by_id(
+    company_id: str,
+    job_id: str,
+    task_id: str
+) -> Optional[Dict[str, Any]]:
     """
     Helper function to get a specific task by its static ID.
+    
+    Args:
+        company_id: Company document ID
+        job_id: Job document ID
+        task_id: Task static ID
+        
+    Returns:
+        Task dictionary or None if not found
     """
     job_data = await fetch_job_data(company_id, job_id)
     schedule = job_data.get("schedule", [])
@@ -354,9 +413,21 @@ async def get_task_by_id(company_id: str, job_id: str, task_id: str) -> Optional
     return None
 
 
-async def get_subtasks_for_main_task(company_id: str, job_id: str, main_task_id: str) -> List[Dict[str, Any]]:
+async def get_subtasks_for_main_task(
+    company_id: str,
+    job_id: str,
+    main_task_id: str
+) -> List[Dict[str, Any]]:
     """
     Helper function to get all subtasks for a main task.
+    
+    Args:
+        company_id: Company document ID
+        job_id: Job document ID
+        main_task_id: Main task static ID
+        
+    Returns:
+        List of subtask dictionaries
     """
     job_data = await fetch_job_data(company_id, job_id)
     schedule = job_data.get("schedule", [])
@@ -386,3 +457,8 @@ async def get_subtasks_for_main_task(company_id: str, job_id: str, main_task_id:
             subtasks.append(task)
     
     return subtasks
+
+
+def get_company_id() -> str:
+    """Get the current company ID (for use in tools)."""
+    return DEFAULT_COMPANY_ID

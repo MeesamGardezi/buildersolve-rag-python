@@ -1,11 +1,10 @@
 """
 FastAPI main application with WebSocket support for real-time chat
+BuilderSolve Agent API
 """
 import os
 import sys
-import json
-from typing import List, Dict, Any
-from datetime import datetime
+from typing import List
 
 # Add current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,7 +15,7 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from constants import DEFAULT_COMPANY_ID, DEFAULT_JOB_ID
-from models.types import ChatRequest, ChatResponse, Job
+from models.chat import ChatRequest, ChatResponse
 from services.firebase_service import fetch_job_data, search_jobs
 from services.gemini_service import send_message_to_agent
 
@@ -27,7 +26,7 @@ load_dotenv()
 app = FastAPI(
     title="BuilderSolve Agent API",
     description="Agentic RAG system for construction project management",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # CORS configuration for local development
@@ -40,41 +39,58 @@ app.add_middleware(
 )
 
 
-# Connection manager for WebSocket
+# =============================================================================
+# WEBSOCKET CONNECTION MANAGER
+# =============================================================================
+
 class ConnectionManager:
+    """Manages WebSocket connections for real-time chat."""
+    
     def __init__(self):
         self.active_connections: List[WebSocket] = []
     
     async def connect(self, websocket: WebSocket):
+        """Accept and track a new WebSocket connection."""
         await websocket.accept()
         self.active_connections.append(websocket)
         print(f"✅ WebSocket connected. Total connections: {len(self.active_connections)}")
     
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        """Remove a WebSocket connection from tracking."""
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
         print(f"❌ WebSocket disconnected. Total connections: {len(self.active_connections)}")
     
     async def send_personal_message(self, message: dict, websocket: WebSocket):
+        """Send a JSON message to a specific WebSocket client."""
         await websocket.send_json(message)
 
 
 manager = ConnectionManager()
 
 
+# =============================================================================
+# REST API ENDPOINTS
+# =============================================================================
+
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Health check endpoint."""
     return {
         "status": "online",
         "service": "BuilderSolve Agent API",
-        "version": "1.0.0"
+        "version": "2.0.0"
     }
 
 
 @app.get("/api/job/{job_id}")
 async def get_job(job_id: str, company_id: str = DEFAULT_COMPANY_ID):
     """
-    REST endpoint to fetch job data
+    REST endpoint to fetch job data.
+    
+    Args:
+        job_id: Job document ID
+        company_id: Company document ID (optional, defaults to DEFAULT_COMPANY_ID)
     """
     try:
         job_data = await fetch_job_data(company_id, job_id)
@@ -86,7 +102,11 @@ async def get_job(job_id: str, company_id: str = DEFAULT_COMPANY_ID):
 @app.get("/api/jobs/search")
 async def search_jobs_endpoint(query: str, company_id: str = DEFAULT_COMPANY_ID):
     """
-    REST endpoint to search for jobs
+    REST endpoint to search for jobs.
+    
+    Args:
+        query: Search query string
+        company_id: Company document ID (optional)
     """
     try:
         results = await search_jobs(query, company_id)
@@ -98,23 +118,38 @@ async def search_jobs_endpoint(query: str, company_id: str = DEFAULT_COMPANY_ID)
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
-    REST endpoint for chat (alternative to WebSocket)
+    REST endpoint for chat (alternative to WebSocket).
+    
+    Args:
+        request: ChatRequest with message, history, and currentJobId
     """
     try:
+        # Convert history to dict format
+        history_dicts = []
+        for msg in request.history:
+            history_dicts.append({
+                "role": msg.role,
+                "parts": [{"text": part.text} for part in msg.parts]
+            })
+        
         response = await send_message_to_agent(
             message=request.message,
-            history=request.history,
+            history=history_dicts,
             current_job_id=request.currentJobId or DEFAULT_JOB_ID
         )
-        return response
+        return response.model_dump()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# WEBSOCKET ENDPOINT
+# =============================================================================
+
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     """
-    WebSocket endpoint for real-time chat
+    WebSocket endpoint for real-time chat.
     
     Expected message format:
     {
@@ -141,7 +176,12 @@ async def websocket_chat(websocket: WebSocket):
         await manager.send_personal_message({
             "type": "welcome",
             "job": welcome_job,
-            "message": f"Hello! I'm your BuilderSolve agent. I have loaded the context for **{welcome_job.get('projectTitle')}**.\n\nYou can ask me about estimates, milestones, client details, or ask me to perform calculations on the data."
+            "message": (
+                f"Hello! I'm your BuilderSolve agent. I have loaded the context for "
+                f"**{welcome_job.get('projectTitle')}**.\n\n"
+                f"You can ask me about estimates, milestones, schedule, payments, "
+                f"budget comparisons, or ask me to switch to a different job."
+            )
         }, websocket)
         
         while True:
@@ -182,7 +222,7 @@ async def websocket_chat(websocket: WebSocket):
                 await manager.send_personal_message({
                     "type": "response",
                     "text": response.text,
-                    "toolExecutions": [te.dict() for te in response.toolExecutions],
+                    "toolExecutions": [te.model_dump() for te in response.toolExecutions],
                     "switchedJobId": response.switchedJobId
                 }, websocket)
             
@@ -196,15 +236,21 @@ async def websocket_chat(websocket: WebSocket):
         manager.disconnect(websocket)
     except Exception as e:
         print(f"❌ WebSocket Error: {e}")
+        import traceback
+        traceback.print_exc()
         try:
             await manager.send_personal_message({
                 "type": "error",
-                "message": "An error occurred. Please refresh and try again."
+                "message": f"An error occurred: {str(e)}. Please refresh and try again."
             }, websocket)
         except:
             pass
         manager.disconnect(websocket)
 
+
+# =============================================================================
+# MAIN ENTRY POINT
+# =============================================================================
 
 if __name__ == "__main__":
     import uvicorn
