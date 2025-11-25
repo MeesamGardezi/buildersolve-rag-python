@@ -1,5 +1,6 @@
 """
 Firebase Firestore service for job data retrieval
+Enhanced parsing for schedule, payment stages, and dependencies
 """
 import os
 import sys
@@ -17,7 +18,6 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from constants import DEFAULT_COMPANY_ID, DEFAULT_JOB_ID, MOCK_JOB_DATA
-from models.types import Job
 
 
 # Initialize Firebase
@@ -54,7 +54,8 @@ except Exception as e:
 
 def convert_timestamps(data: Any) -> Any:
     """
-    Helper to convert Firestore Timestamp to ISO string
+    Helper to convert Firestore Timestamp to ISO string.
+    Also handles nested structures.
     """
     if data is None:
         return data
@@ -76,6 +77,149 @@ def convert_timestamps(data: Any) -> Any:
         return {key: convert_timestamps(value) for key, value in data.items()}
     
     return data
+
+
+def parse_date_field(value: Any) -> Optional[str]:
+    """
+    Parse various date formats to ISO string (YYYY-MM-DD).
+    Handles:
+    - String dates (already formatted)
+    - Firestore Timestamps
+    - Integer timestamps (milliseconds)
+    """
+    if value is None:
+        return None
+    
+    if isinstance(value, str):
+        # Already a string, assume it's formatted correctly
+        return value
+    
+    if hasattr(value, 'timestamp'):
+        # Firestore Timestamp
+        dt = datetime.fromtimestamp(value.timestamp())
+        return dt.strftime('%Y-%m-%d')
+    
+    if isinstance(value, int):
+        # Milliseconds since epoch
+        dt = datetime.fromtimestamp(value / 1000)
+        return dt.strftime('%Y-%m-%d')
+    
+    if isinstance(value, datetime):
+        return value.strftime('%Y-%m-%d')
+    
+    return None
+
+
+def parse_dependency(dep_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse a dependency object"""
+    return {
+        "predecessorTaskId": str(dep_data.get("predecessorTaskId", "")),
+        "predecessorId": dep_data.get("predecessorId"),
+        "type": dep_data.get("type", "FS"),
+        "lag": float(dep_data.get("lag", 0))
+    }
+
+
+def parse_payment_stage(stage_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse a payment stage object"""
+    return {
+        "id": stage_data.get("id", ""),
+        "name": stage_data.get("name", ""),
+        "percentage": float(stage_data.get("percentage", 0)),
+        "isManualDate": stage_data.get("isManualDate", True),
+        "linkedTaskId": stage_data.get("linkedTaskId"),
+        "linkedType": stage_data.get("linkedType"),
+        "lagDays": float(stage_data.get("lagDays", 0)),
+        "manualDate": parse_date_field(stage_data.get("manualDate")),
+        "baseDate": parse_date_field(stage_data.get("baseDate")),
+        "effectiveDate": parse_date_field(stage_data.get("effectiveDate"))
+    }
+
+
+def parse_schedule_row(task_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Parse a schedule row with full support for:
+    - Task identification and typing
+    - Date fields (with format normalization)
+    - Dependencies
+    - Payment stages
+    - Hierarchy (main tasks / subtasks)
+    """
+    # Parse dependencies
+    dependencies = []
+    if task_data.get("dependencies"):
+        for dep in task_data["dependencies"]:
+            if isinstance(dep, dict):
+                dependencies.append(parse_dependency(dep))
+    
+    # Parse payment stages
+    payment_stages = []
+    if task_data.get("paymentStages"):
+        for stage in task_data["paymentStages"]:
+            if isinstance(stage, dict):
+                payment_stages.append(parse_payment_stage(stage))
+    
+    # Parse resources
+    resources = {}
+    if task_data.get("resources") and isinstance(task_data["resources"], dict):
+        for key, value in task_data["resources"].items():
+            if isinstance(value, dict):
+                resources[key] = dict(value)
+            else:
+                resources[key] = {"name": str(value), "role": "Unknown"}
+    
+    return {
+        # Identification
+        "index": int(task_data.get("index", 0)),
+        "id": task_data.get("id", f"task_{task_data.get('index', 0)}"),
+        "task": task_data.get("task", ""),
+        
+        # Task type
+        "taskType": task_data.get("taskType", "labour"),
+        
+        # Time fields
+        "hours": float(task_data.get("hours", 0)),
+        "consumed": float(task_data.get("consumed", 0)),
+        "duration": float(task_data.get("duration", 0)),
+        
+        # Dates (normalized to ISO strings)
+        "startDate": parse_date_field(task_data.get("startDate")),
+        "endDate": parse_date_field(task_data.get("endDate")),
+        "actualStart": parse_date_field(task_data.get("actualStart")),
+        "actualEnd": parse_date_field(task_data.get("actualEnd")),
+        "baselineStartDate": parse_date_field(task_data.get("baselineStartDate")),
+        "baselineEndDate": parse_date_field(task_data.get("baselineEndDate")),
+        
+        # Progress
+        "percentageComplete": float(task_data.get("percentageComplete", 0)),
+        "schedulingMode": task_data.get("schedulingMode", "Automatic"),
+        
+        # Critical path
+        "isCritical": bool(task_data.get("isCritical", False)),
+        "totalSlack": float(task_data.get("totalSlack", 0)),
+        
+        # Hierarchy
+        "isMainTask": bool(task_data.get("isMainTask", False)),
+        "mainTaskIndex": task_data.get("mainTaskIndex"),
+        "mainTaskId": task_data.get("mainTaskId"),
+        "isExpanded": bool(task_data.get("isExpanded", True)),
+        "subtaskIndices": task_data.get("subtaskIndices"),
+        "subtaskIds": task_data.get("subtaskIds"),
+        
+        # Dependencies
+        "dependencies": dependencies,
+        
+        # Resources
+        "resources": resources,
+        
+        # Payments
+        "paymentStages": payment_stages,
+        "totalPaymentAmount": float(task_data.get("totalPaymentAmount", 0)),
+        
+        # Other
+        "remarks": task_data.get("remarks", ""),
+        "isBaselineSet": bool(task_data.get("isBaselineSet", False))
+    }
 
 
 async def search_jobs(query: str, company_id: str = DEFAULT_COMPANY_ID) -> List[Dict[str, Any]]:
@@ -126,6 +270,7 @@ async def search_jobs(query: str, company_id: str = DEFAULT_COMPANY_ID) -> List[
 async def fetch_job_data(company_id: str = DEFAULT_COMPANY_ID, job_id: str = DEFAULT_JOB_ID) -> Dict[str, Any]:
     """
     Fetches the full job document from Firestore.
+    Includes enhanced parsing for schedule, dependencies, and payment stages.
     """
     # Fallback to mock if DB not initialized
     if not db:
@@ -146,18 +291,41 @@ async def fetch_job_data(company_id: str = DEFAULT_COMPANY_ID, job_id: str = DEF
             if not isinstance(locations, str):
                 locations = json.dumps(locations) if locations else "[]"
             
-            # Convert timestamps
+            # Convert basic timestamps
             processed_data = convert_timestamps(raw_data)
+            
+            # Parse schedule with enhanced handling
+            schedule = []
+            raw_schedule = processed_data.get("schedule", [])
+            if isinstance(raw_schedule, list):
+                for task in raw_schedule:
+                    if isinstance(task, dict):
+                        schedule.append(parse_schedule_row(task))
+            
+            # Parse estimate
+            estimate = processed_data.get("estimate", [])
+            if not isinstance(estimate, list):
+                estimate = []
+            
+            # Parse milestones
+            milestones = processed_data.get("milestones", [])
+            if not isinstance(milestones, list):
+                milestones = []
+            
+            # Parse cost codes (note: Firestore might use lowercase)
+            cost_codes = processed_data.get("costCodes", processed_data.get("costcodes", []))
+            if not isinstance(cost_codes, list):
+                cost_codes = []
             
             # Construct the Job object
             job = {
                 "documentId": doc.id,
                 **processed_data,
                 "locations": locations,
-                "estimate": processed_data.get("estimate", []),
-                "milestones": processed_data.get("milestones", []),
-                "schedule": processed_data.get("schedule", []),
-                "costCodes": processed_data.get("costcodes", []),  # Note: Firestore uses lowercase
+                "estimate": estimate,
+                "milestones": milestones,
+                "schedule": schedule,
+                "costCodes": cost_codes,
                 "flooringEstimateData": processed_data.get("flooringEstimateData", []),
             }
             
@@ -170,3 +338,51 @@ async def fetch_job_data(company_id: str = DEFAULT_COMPANY_ID, job_id: str = DEF
         print(f"❌ Error fetching job data: {e}")
         # Fallback to mock on error
         return MOCK_JOB_DATA
+
+
+async def get_task_by_id(company_id: str, job_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Helper function to get a specific task by its static ID.
+    """
+    job_data = await fetch_job_data(company_id, job_id)
+    schedule = job_data.get("schedule", [])
+    
+    for task in schedule:
+        if task.get("id") == task_id:
+            return task
+    
+    return None
+
+
+async def get_subtasks_for_main_task(company_id: str, job_id: str, main_task_id: str) -> List[Dict[str, Any]]:
+    """
+    Helper function to get all subtasks for a main task.
+    """
+    job_data = await fetch_job_data(company_id, job_id)
+    schedule = job_data.get("schedule", [])
+    
+    # Find main task first
+    main_task = None
+    for task in schedule:
+        if task.get("id") == main_task_id:
+            main_task = task
+            break
+    
+    if not main_task:
+        return []
+    
+    # Get subtask IDs
+    subtask_ids = main_task.get("subtaskIds", [])
+    subtask_indices = main_task.get("subtaskIndices", [])
+    
+    # Find matching subtasks
+    subtasks = []
+    for task in schedule:
+        if task.get("id") in subtask_ids:
+            subtasks.append(task)
+        elif task.get("index") in subtask_indices:
+            subtasks.append(task)
+        elif task.get("mainTaskId") == main_task_id:
+            subtasks.append(task)
+    
+    return subtasks
