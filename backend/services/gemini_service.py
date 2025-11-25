@@ -156,7 +156,7 @@ query_schedule_tool = {
 get_task_details_tool = {
     "function_declarations": [{
         "name": "get_task_details",
-        "description": "Get full details of a specific task including payment stages, dependencies, dates, progress, and resources. Use when user asks about a specific task.",
+        "description": "Get full details of a specific task including payment stages, dependencies, dates, progress, and resources. Use when user asks about a specific task. For PAYMENT-RELATED queries, set onlyPaymentCapable=true to exclude labour tasks.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -167,6 +167,10 @@ get_task_details_tool = {
                 "taskId": {
                     "type": "STRING",
                     "description": "Exact task ID if known (e.g., 'task_electrical'). Takes precedence over searchQuery."
+                },
+                "onlyPaymentCapable": {
+                    "type": "BOOLEAN",
+                    "description": "If true, only search tasks that CAN have payment stages (material, subcontractor, milestone). Use this for payment-related queries. Default false."
                 }
             },
             "required": []
@@ -587,28 +591,47 @@ async def execute_get_task_details(job_data: Dict[str, Any], args: Dict[str, Any
     schedule = job_data.get("schedule", [])
     task_id = args.get("taskId")
     search_query = args.get("searchQuery")
+    only_payment_capable = args.get("onlyPaymentCapable", False)
+    
+    # Payment-capable task types
+    PAYMENT_TASK_TYPES = ['material', 'subcontractor', 'milestone']
+    
+    # Filter schedule if only payment-capable tasks requested
+    searchable_tasks = schedule
+    if only_payment_capable:
+        searchable_tasks = [t for t in schedule if t.get("taskType") in PAYMENT_TASK_TYPES]
     
     # Find task
     found_task = None
     
     if task_id:
-        for t in schedule:
+        for t in searchable_tasks:
             if t.get("id") == task_id:
                 found_task = t
                 break
     
     if not found_task and search_query:
-        for t in schedule:
+        for t in searchable_tasks:
             if match_text(t, search_query, ["task", "id"]):
                 found_task = t
                 break
     
     if not found_task:
-        return {
-            "error": "Task not found",
-            "searchedFor": task_id or search_query,
-            "availableTasks": [t.get("task") for t in schedule[:10]]
-        }
+        # Provide helpful error message
+        if only_payment_capable:
+            available = [f"{t.get('task')} ({t.get('taskType')})" for t in searchable_tasks[:10]]
+            return {
+                "error": "No payment-capable task found matching your search",
+                "searchedFor": task_id or search_query,
+                "note": "Only material, subcontractor, and milestone tasks can have payment stages",
+                "availablePaymentTasks": available
+            }
+        else:
+            return {
+                "error": "Task not found",
+                "searchedFor": task_id or search_query,
+                "availableTasks": [t.get("task") for t in schedule[:10]]
+            }
     
     return format_task_details(found_task)
 

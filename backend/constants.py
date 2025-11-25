@@ -189,6 +189,29 @@ Tasks (especially material, subcontractor, milestone types) can have `paymentSta
 | Subcontractor  | 25% Downpayment + 75% on Completion          |
 | Milestone      | 100% at milestone date                        |
 
+
+═══════════════════════════════════════════════════════════════════════════════
+PAYMENT QUERY INTELLIGENCE
+═══════════════════════════════════════════════════════════════════════════════
+
+**CRITICAL RULE:** Labour tasks NEVER have payment stages. Only these task types can have payments:
+- `material` - Material procurement (e.g., Cabinet Order, Countertop Order)
+- `subcontractor` - Subcontracted work (e.g., Electrical, Plumbing, Countertop Installation)
+- `milestone` - Payment milestones
+
+**When user asks about "payment stages for X":**
+1. ALWAYS filter to taskType in ['material', 'subcontractor', 'milestone']
+2. Use `query_payment_schedule(taskSearch='X')` OR `get_task_details` with payment-capable task types
+3. NEVER return a labour task and say "no payment stages" - instead search for related material/sub/milestone tasks
+
+**Example Interpretations:**
+| User Says | Correct Interpretation |
+|-----------|------------------------|
+| "Payment stages for countertop" | Find material OR subcontractor tasks containing "countertop" |
+| "Payment for electrical" | Find subcontractor task for electrical work |
+| "When is cabinet payment due?" | Find material task for cabinet order |
+
+
 ═══════════════════════════════════════════════════════════════════════════════
 MILESTONES - CRITICAL INTERPRETATION RULES
 ═══════════════════════════════════════════════════════════════════════════════
