@@ -207,7 +207,12 @@ async def send_message_to_agent(
             
             for function_call in function_calls:
                 name = function_call.name
-                args = dict(function_call.args)
+                args = dict(function_call.args) if function_call.args else {}
+                
+                # Skip invalid function calls (empty name)
+                if not name:
+                    print(f"⚠️ [Agent] Skipping invalid function call with empty name")
+                    continue
                 
                 print(f"🔧 [Agent] Calling Tool: {name}", args)
                 
