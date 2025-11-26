@@ -2,19 +2,163 @@
 Helper functions for BuilderSolve Agent tools
 Shared utilities for text matching, formatting, and data transformation
 """
+import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 
-def match_text(item: Dict[str, Any], search_query: str, fields: List[str]) -> bool:
+def normalize_text(text: str) -> str:
     """
-    Smart text matcher for filtering items.
-    Returns True if search_query matches any of the specified fields.
+    Normalize text for better matching.
+    - Converts to lowercase
+    - Replaces multiple spaces/underscores/hyphens with single space
+    - Removes special characters except alphanumeric and spaces
+    - Strips whitespace
+    
+    Args:
+        text: Input text to normalize
+        
+    Returns:
+        Normalized text string
+    """
+    if not text:
+        return ""
+    
+    # Convert to lowercase
+    result = str(text).lower()
+    
+    # Replace underscores and hyphens with spaces
+    result = re.sub(r'[_\-]+', ' ', result)
+    
+    # Remove special characters (keep alphanumeric and spaces)
+    result = re.sub(r'[^a-z0-9\s]', '', result)
+    
+    # Replace multiple spaces with single space
+    result = re.sub(r'\s+', ' ', result)
+    
+    # Strip whitespace
+    return result.strip()
+
+
+def fuzzy_match(query: str, text: str) -> bool:
+    """
+    Perform fuzzy matching between query and text.
+    Handles variations like "cleanup" vs "clean up", "cleanUp" vs "clean_up".
+    
+    Args:
+        query: Search query (will be normalized)
+        text: Text to search in (will be normalized)
+        
+    Returns:
+        True if query matches text with fuzzy logic
+    """
+    if not query or not text:
+        return not query  # Empty query matches everything
+    
+    norm_query = normalize_text(query)
+    norm_text = normalize_text(text)
+    
+    if not norm_query:
+        return True
+    
+    # Direct substring match after normalization
+    if norm_query in norm_text:
+        return True
+    
+    # Token-based match: all query tokens must be present in text
+    query_tokens = norm_query.split()
+    if not query_tokens:
+        return True
+    
+    # Check if all tokens are present
+    if all(token in norm_text for token in query_tokens):
+        return True
+    
+    # Concatenated match: "cleanup" should match "clean up"
+    # Remove spaces from both and check
+    query_no_space = norm_query.replace(' ', '')
+    text_no_space = norm_text.replace(' ', '')
+    
+    if query_no_space in text_no_space:
+        return True
+    
+    # Check if query tokens appear in order (not necessarily adjacent)
+    # This handles "cabinet painting" matching "cabinet prep painting labor"
+    if len(query_tokens) > 1:
+        pattern = '.*'.join(re.escape(token) for token in query_tokens)
+        if re.search(pattern, norm_text):
+            return True
+    
+    return False
+
+
+def build_searchable_context(
+    task: Dict[str, Any],
+    schedule: List[Dict[str, Any]] = None,
+    include_parent: bool = True
+) -> str:
+    """
+    Build a comprehensive searchable string for a task,
+    optionally including parent task context.
+    
+    Args:
+        task: Task dictionary
+        schedule: Full schedule list (needed to find parent task)
+        include_parent: Whether to include parent task name in context
+        
+    Returns:
+        Concatenated searchable string
+    """
+    parts = []
+    
+    # Add task's own searchable fields
+    searchable_fields = ["task", "remarks", "id", "taskType"]
+    for field in searchable_fields:
+        value = task.get(field)
+        if value and isinstance(value, str):
+            parts.append(value)
+    
+    # Add parent task context if available
+    if include_parent and schedule:
+        main_task_id = task.get("mainTaskId")
+        main_task_index = task.get("mainTaskIndex")
+        
+        if main_task_id or main_task_index is not None:
+            # Find parent task
+            for parent in schedule:
+                if parent.get("id") == main_task_id:
+                    parent_name = parent.get("task", "")
+                    if parent_name:
+                        parts.append(f"under {parent_name}")
+                        parts.append(parent_name)
+                    break
+                elif main_task_index is not None and parent.get("index") == main_task_index:
+                    parent_name = parent.get("task", "")
+                    if parent_name:
+                        parts.append(f"under {parent_name}")
+                        parts.append(parent_name)
+                    break
+    
+    return ' '.join(parts)
+
+
+def match_text(
+    item: Dict[str, Any],
+    search_query: str,
+    fields: List[str],
+    schedule: List[Dict[str, Any]] = None,
+    include_parent_context: bool = True
+) -> bool:
+    """
+    Smart text matcher for filtering items with fuzzy matching
+    and optional hierarchical context.
     
     Args:
         item: Dictionary containing the data to search
         search_query: The search term
         fields: List of field names to search in
+        schedule: Full schedule list (for parent context lookup)
+        include_parent_context: Whether to include parent task in search
         
     Returns:
         True if match found, False otherwise
@@ -22,29 +166,27 @@ def match_text(item: Dict[str, Any], search_query: str, fields: List[str]) -> bo
     if not search_query:
         return True
     
-    query = str(search_query).lower().strip()
-    if query in ['all', '*', '']:
+    query = str(search_query).strip()
+    if query.lower() in ['all', '*', '']:
         return True
     
-    # Collect all searchable text
+    # Collect all searchable text from specified fields
     context_parts = []
     for field in fields:
         value = item.get(field)
         if value and isinstance(value, (str, int, float)):
-            context_parts.append(str(value).lower())
+            context_parts.append(str(value))
     
-    raw_context = ' '.join(context_parts)
+    # Add parent context for schedule tasks
+    if include_parent_context and schedule and "mainTaskId" in item:
+        parent_context = build_searchable_context(item, schedule, include_parent=True)
+        context_parts.append(parent_context)
     
-    # Simple substring match
-    if query in raw_context:
-        return True
+    # Join all context
+    full_context = ' '.join(context_parts)
     
-    # Token-based match (all query tokens must be present)
-    query_tokens = [t for t in query.split() if len(t) > 0]
-    if not query_tokens:
-        return False
-    
-    return all(token in raw_context for token in query_tokens)
+    # Use fuzzy matching
+    return fuzzy_match(query, full_context)
 
 
 def get_task_status(task: Dict[str, Any]) -> str:

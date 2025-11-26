@@ -126,4 +126,4 @@ class Job(BaseModel):
 
     class Config:
         """Pydantic config"""
-        arbitrary_types_allowed = Trues
+        arbitrary_types_allowed = True

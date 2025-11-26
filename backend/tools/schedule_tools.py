@@ -8,6 +8,8 @@ from .helpers import (
     parse_date,
     format_task_summary,
     format_task_details,
+    fuzzy_match,
+    build_searchable_context,
 )
 
 
@@ -53,12 +55,18 @@ async def execute_query_schedule(
     if is_main_task is not None:
         filtered = [t for t in filtered if t.get("isMainTask") == is_main_task]
     
-    # Filter by text search
+    # Filter by text search (now with hierarchical context)
     search_query = args.get("searchQuery")
     if search_query:
         filtered = [
             t for t in filtered
-            if match_text(t, search_query, ["task", "remarks"])
+            if match_text(
+                t,
+                search_query,
+                ["task", "remarks"],
+                schedule=schedule,  # Pass full schedule for parent context
+                include_parent_context=True
+            )
         ]
     
     # Filter by date range
@@ -134,6 +142,8 @@ async def execute_get_task_details(
     Get full details of a specific task including payment stages,
     dependencies, dates, progress, and resources.
     
+    Now includes hierarchical search - will find tasks by parent context.
+    
     Args:
         job_data: Full job data dictionary
         args: Tool arguments containing searchQuery or taskId
@@ -157,7 +167,7 @@ async def execute_get_task_details(
             if t.get("taskType") in PAYMENT_TASK_TYPES
         ]
     
-    # Find task by ID first
+    # Find task by ID first (exact match)
     found_task = None
     
     if task_id:
@@ -166,15 +176,42 @@ async def execute_get_task_details(
                 found_task = t
                 break
     
-    # Fall back to search query
+    # Fall back to search query with hierarchical context
     if not found_task and search_query:
+        # Score tasks by match quality and return best match
+        best_match = None
+        best_score = 0
+        
         for t in searchable_tasks:
-            if match_text(t, search_query, ["task", "id"]):
-                found_task = t
-                break
+            # Build searchable context including parent task
+            context = build_searchable_context(t, schedule, include_parent=True)
+            
+            # Check if it matches
+            if fuzzy_match(search_query, context):
+                # Calculate a simple relevance score
+                # Direct task name match scores higher than parent match
+                task_name = t.get("task", "")
+                score = 0
+                
+                # Direct match in task name (highest priority)
+                if fuzzy_match(search_query, task_name):
+                    score = 100
+                # Match via parent context (lower priority but still valid)
+                elif fuzzy_match(search_query, context):
+                    score = 50
+                
+                # Prefer payment-capable tasks when searching for payments
+                if only_payment_capable and t.get("taskType") in PAYMENT_TASK_TYPES:
+                    score += 10
+                
+                if score > best_score:
+                    best_score = score
+                    best_match = t
+        
+        found_task = best_match
     
     if not found_task:
-        # Provide helpful error message
+        # Provide helpful error message with available tasks
         if only_payment_capable:
             available = [
                 f"{t.get('task')} ({t.get('taskType')})"
@@ -184,16 +221,40 @@ async def execute_get_task_details(
                 "error": "No payment-capable task found matching your search",
                 "searchedFor": task_id or search_query,
                 "note": "Only material, subcontractor, and milestone tasks can have payment stages",
-                "availablePaymentTasks": available
+                "availablePaymentTasks": available,
+                "hint": "Try searching with different keywords or check the task name spelling"
             }
         else:
+            # Show tasks that partially match to help user
+            partial_matches = []
+            for t in schedule[:20]:
+                context = build_searchable_context(t, schedule, include_parent=True)
+                task_name = t.get("task", "")
+                partial_matches.append({
+                    "task": task_name,
+                    "taskType": t.get("taskType"),
+                    "parentContext": t.get("mainTaskId")
+                })
+            
             return {
                 "error": "Task not found",
                 "searchedFor": task_id or search_query,
-                "availableTasks": [t.get("task") for t in schedule[:10]]
+                "availableTasks": [t.get("task") for t in schedule[:10]],
+                "hint": "Try searching with the exact task name or parent task name"
             }
     
-    return format_task_details(found_task)
+    # Add parent task info to the response
+    result = format_task_details(found_task)
+    
+    # Add parent task name if this is a subtask
+    main_task_id = found_task.get("mainTaskId")
+    if main_task_id:
+        for parent in schedule:
+            if parent.get("id") == main_task_id:
+                result["parentTaskName"] = parent.get("task")
+                break
+    
+    return result
 
 
 async def execute_query_task_hierarchy(
@@ -226,12 +287,14 @@ async def execute_query_task_hierarchy(
                 main_task = t
                 break
     
-    # Fall back to search
+    # Fall back to search with fuzzy matching
     if not main_task and main_task_search:
         for t in schedule:
-            if t.get("isMainTask") and match_text(t, main_task_search, ["task"]):
-                main_task = t
-                break
+            if t.get("isMainTask"):
+                task_name = t.get("task", "")
+                if fuzzy_match(main_task_search, task_name):
+                    main_task = t
+                    break
     
     if not main_task:
         # List available main tasks
@@ -312,7 +375,7 @@ async def execute_query_dependencies(
     id_to_task = {t.get("id"): t for t in schedule}
     index_to_task = {str(t.get("index")): t for t in schedule}
     
-    # Find target task
+    # Find target task with fuzzy matching and hierarchical context
     target_task = None
     
     if task_id:
@@ -320,7 +383,9 @@ async def execute_query_dependencies(
     
     if not target_task and task_search:
         for t in schedule:
-            if match_text(t, task_search, ["task", "id"]):
+            # Use hierarchical search
+            context = build_searchable_context(t, schedule, include_parent=True)
+            if fuzzy_match(task_search, context):
                 target_task = t
                 break
     

@@ -2,7 +2,13 @@
 Payment tool handlers for BuilderSolve Agent
 """
 from typing import Dict, Any, List
-from .helpers import match_text, get_task_status, parse_date
+from .helpers import (
+    match_text,
+    get_task_status,
+    parse_date,
+    fuzzy_match,
+    build_searchable_context,
+)
 
 
 async def execute_query_payment_schedule(
@@ -13,6 +19,7 @@ async def execute_query_payment_schedule(
     Execute query_payment_schedule tool.
     
     Get payment stages across tasks with optional filtering.
+    Now supports hierarchical search - can find tasks by parent context.
     
     Args:
         job_data: Full job data dictionary
@@ -33,16 +40,29 @@ async def execute_query_payment_schedule(
     all_payments: List[Dict[str, Any]] = []
     
     for task in schedule:
-        # Apply task filters
+        # Apply task type filter
         if task_type and task.get("taskType") != task_type:
             continue
         
-        if task_search and not match_text(task, task_search, ["task"]):
-            continue
+        # Apply task search filter with hierarchical context
+        if task_search:
+            # Build searchable context including parent task
+            context = build_searchable_context(task, schedule, include_parent=True)
+            if not fuzzy_match(task_search, context):
+                continue
         
         total_amount = task.get("totalPaymentAmount", 0)
         if total_amount <= 0:
             continue
+        
+        # Get parent task name for context in results
+        parent_task_name = None
+        main_task_id = task.get("mainTaskId")
+        if main_task_id:
+            for parent in schedule:
+                if parent.get("id") == main_task_id:
+                    parent_task_name = parent.get("task")
+                    break
         
         for stage in task.get("paymentStages", []):
             effective_date = parse_date(stage.get("effectiveDate"))
@@ -56,7 +76,7 @@ async def execute_query_payment_schedule(
             pct = stage.get("percentage", 0)
             amount = total_amount * (pct / 100)
             
-            all_payments.append({
+            payment_entry = {
                 "taskId": task.get("id"),
                 "taskName": task.get("task"),
                 "taskType": task.get("taskType"),
@@ -66,7 +86,13 @@ async def execute_query_payment_schedule(
                 "effectiveDate": stage.get("effectiveDate"),
                 "isManualDate": stage.get("isManualDate", True),
                 "taskStatus": get_task_status(task)
-            })
+            }
+            
+            # Add parent context if available
+            if parent_task_name:
+                payment_entry["parentTaskName"] = parent_task_name
+            
+            all_payments.append(payment_entry)
     
     # Sort by date
     all_payments.sort(key=lambda x: x.get("effectiveDate") or "9999-12-31")

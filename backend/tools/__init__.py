@@ -20,6 +20,10 @@ from .helpers import (
     format_task_summary,
     format_task_details,
     ensure_float,
+    # New exports for enhanced matching
+    normalize_text,
+    fuzzy_match,
+    build_searchable_context,
 )
 
 from .estimate_tools import execute_calculate_estimate_sum
@@ -55,6 +59,9 @@ __all__ = [
     "format_task_summary",
     "format_task_details",
     "ensure_float",
+    "normalize_text",
+    "fuzzy_match",
+    "build_searchable_context",
     # Estimate
     "execute_calculate_estimate_sum",
     # Schedule

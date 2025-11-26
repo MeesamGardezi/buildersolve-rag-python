@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 import aiohttp
 import certifi
 
-from .helpers import match_text, ensure_float
+from .helpers import fuzzy_match, match_text, ensure_float
 
 
 # API base URL for comparison data
@@ -274,12 +274,11 @@ async def execute_query_comparison_rows(
             if tag_lower in [t.lower() for t in r.get("tags", [])]
         ]
     
-    # Filter by cost code search
+    # Filter by cost code search (with fuzzy matching)
     if cost_code_search:
-        search_lower = cost_code_search.lower()
         filtered = [
             r for r in filtered
-            if search_lower in r.get("costCode", "").lower()
+            if fuzzy_match(cost_code_search, r.get("costCode", ""))
         ]
     
     # Filter by over budget
